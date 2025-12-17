@@ -30,6 +30,8 @@ export default function App() {
   
   // UI toggles
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isKnowledgeOpen, setIsKnowledgeOpen] = useState(true);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false); // New: Mobile Menu Toggle
 
   // Ref to scroll to bottom of transcript
   const transcriptEndRef = useRef<HTMLDivElement>(null);
@@ -203,6 +205,59 @@ export default function App() {
     return `${sec / 60}m`;
   };
 
+  // Render Logic for stats/controls (Shared between desktop and mobile menu)
+  const renderControls = (isMobile: boolean) => (
+    <div className={`${isMobile ? 'flex flex-col gap-4' : 'hidden md:flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg p-1'}`}>
+        <div className={isMobile ? 'flex flex-col gap-1' : ''}>
+             {isMobile && <label className="text-xs font-bold text-slate-500 uppercase">AI Model</label>}
+             <select 
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                className={`bg-transparent text-xs font-medium text-slate-700 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-indigo-500 outline-none border-none cursor-pointer transition-all ${isMobile ? 'p-2 border border-slate-200 bg-white' : 'py-1.5 px-3'}`}
+             >
+                <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash Lite</option>
+             </select>
+        </div>
+             
+        {!isMobile && <div className="w-px h-4 bg-slate-200"></div>}
+             
+        <div className={`flex ${isMobile ? 'flex-col gap-1' : 'items-center gap-1 px-2'}`}>
+            {isMobile && <label className="text-xs font-bold text-slate-500 uppercase">Audio Buffer</label>}
+            <div className={`flex items-center ${isMobile ? 'p-2 bg-white border border-slate-200 rounded' : ''}`}>
+                {!isMobile && <svg className="w-3 h-3 text-slate-400 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>}
+                <select 
+                    value={bufferDuration}
+                    onChange={(e) => setBufferDuration(Number(e.target.value))}
+                    className="bg-transparent text-xs font-medium text-slate-700 py-1.5 px-1 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-indigo-500 outline-none border-none cursor-pointer transition-all w-full"
+                >
+                    <option value={60}>Last 1 min</option>
+                    <option value={120}>Last 2 mins</option>
+                    <option value={180}>Last 3 mins</option>
+                    <option value={300}>Last 5 mins</option>
+                </select>
+            </div>
+        </div>
+
+        {!isMobile && <div className="w-px h-4 bg-slate-200"></div>}
+             
+        <div className={`${isMobile ? 'grid grid-cols-3 gap-2 bg-slate-100 p-3 rounded-lg' : 'px-3 flex gap-4'} text-[10px] font-mono text-slate-500`}>
+             <div className="flex flex-col md:block">
+                <span className={isMobile ? "text-[8px] uppercase" : ""}>REQ:</span>
+                <strong className={`text-slate-700 ${isMobile ? "text-sm" : "ml-1"}`}>{usage.analyzedCount}</strong>
+             </div>
+             <div className="flex flex-col md:block">
+                <span className={isMobile ? "text-[8px] uppercase" : ""}>SEC:</span>
+                <strong className={`text-slate-700 ${isMobile ? "text-sm" : "ml-1"}`}>{usage.totalAudioSeconds.toFixed(0)}</strong>
+             </div>
+             <div className="flex flex-col md:block">
+                <span className={isMobile ? "text-[8px] uppercase" : ""}>Est.$:</span>
+                <strong className={`text-slate-700 ${isMobile ? "text-sm" : "ml-1"}`}>{usage.estimatedCost.toFixed(4)}</strong>
+             </div>
+        </div>
+    </div>
+  );
+
   return (
     <div className="h-screen bg-slate-50 flex flex-col font-sans text-slate-900 overflow-hidden">
       {/* --- Header --- */}
@@ -227,45 +282,13 @@ export default function App() {
           </div>
 
           {/* Desktop Controls */}
-          <div className="hidden md:flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg p-1">
-             <select 
-                value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value)}
-                className="bg-transparent text-xs font-medium text-slate-700 py-1.5 px-3 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-indigo-500 outline-none border-none cursor-pointer transition-all"
-             >
-                <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
-                <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash Lite</option>
-             </select>
-             
-             <div className="w-px h-4 bg-slate-200"></div>
-             
-             <div className="flex items-center gap-1 px-2">
-                <svg className="w-3 h-3 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                <select 
-                    value={bufferDuration}
-                    onChange={(e) => setBufferDuration(Number(e.target.value))}
-                    className="bg-transparent text-xs font-medium text-slate-700 py-1.5 px-1 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-indigo-500 outline-none border-none cursor-pointer transition-all"
-                >
-                    <option value={60}>Last 1 min</option>
-                    <option value={120}>Last 2 mins</option>
-                    <option value={180}>Last 3 mins</option>
-                    <option value={300}>Last 5 mins</option>
-                </select>
-             </div>
-
-             <div className="w-px h-4 bg-slate-200"></div>
-             
-             <div className="px-3 flex gap-4 text-[10px] font-mono text-slate-500">
-                <span>REQ: <strong className="text-slate-700">{usage.analyzedCount}</strong></span>
-                <span>SEC: <strong className="text-slate-700">{usage.totalAudioSeconds.toFixed(0)}</strong></span>
-                <span>Est.$: <strong className="text-slate-700">{usage.estimatedCost.toFixed(4)}</strong></span>
-             </div>
-          </div>
+          {renderControls(false)}
 
           {/* Right Actions */}
           <div className="flex items-center gap-2">
+             {/* Desktop Download Actions */}
              {status === AppStatus.IDLE && hasRecordedData && (
-                <>
+                <div className="hidden md:flex items-center gap-2">
                   <button 
                     onClick={downloadAudio}
                     className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 hover:text-indigo-600 transition-colors"
@@ -283,8 +306,22 @@ export default function App() {
                     <span className="hidden sm:inline">Transcript</span>
                   </button>
                   <div className="w-px h-6 bg-slate-300 mx-1"></div>
-                </>
+                </div>
              )}
+             
+             {/* Mobile Menu Toggle */}
+             <button
+               onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+               className="md:hidden p-2 text-slate-600 hover:bg-slate-100 rounded-lg"
+             >
+               <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  {isMobileMenuOpen ? (
+                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  ) : (
+                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                  )}
+               </svg>
+             </button>
 
              <button
               onClick={toggleRecording}
@@ -300,23 +337,50 @@ export default function App() {
                    <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
                  </span>
               )}
-              {status !== AppStatus.IDLE ? 'Stop Live' : (hasRecordedData ? 'Start New Session' : 'Start Live')}
+              {status !== AppStatus.IDLE ? 'Stop' : (hasRecordedData ? 'New' : 'Start')}
             </button>
           </div>
         </div>
+
+        {/* Mobile Menu Dropdown */}
+        {isMobileMenuOpen && (
+           <div className="md:hidden bg-slate-50 border-t border-slate-200 p-4 space-y-4 shadow-inner overflow-y-auto max-h-[calc(100vh-4rem)]">
+              {renderControls(true)}
+              
+              {/* Mobile Download Actions */}
+              {status === AppStatus.IDLE && hasRecordedData && (
+                <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-200">
+                  <button 
+                    onClick={downloadAudio}
+                    className="flex items-center justify-center gap-1.5 px-3 py-3 text-sm font-semibold text-slate-700 bg-white border border-slate-200 rounded-lg shadow-sm active:bg-slate-50"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                    Download Audio
+                  </button>
+                  <button 
+                    onClick={generateFullTranscript}
+                    className="flex items-center justify-center gap-1.5 px-3 py-3 text-sm font-semibold text-slate-700 bg-white border border-slate-200 rounded-lg shadow-sm active:bg-slate-50"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                    Full Transcript
+                  </button>
+                </div>
+              )}
+           </div>
+        )}
       </header>
 
       {/* --- Main Content --- */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 overflow-hidden">
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 flex flex-col lg:grid lg:grid-cols-12 gap-4 lg:gap-6 overflow-hidden">
         
         {/* Left Sidebar */}
-        <aside className="lg:col-span-4 flex flex-col gap-4 overflow-y-auto max-h-[calc(100vh-8rem)] pb-20 lg:pb-0 scrollbar-hide">
+        <aside className="lg:col-span-4 flex flex-col gap-4 overflow-y-auto max-h-[60vh] lg:max-h-[calc(100vh-8rem)] scrollbar-hide shrink-0">
           
-          {/* 1. Hero Trigger Button */}
+          {/* 1. Hero Trigger Button - Fixed Height (h-28 sm:h-32) to prevent jumping */}
           <button
             onClick={triggerAnalysis}
             disabled={status !== AppStatus.RECORDING}
-            className={`w-full py-6 sm:py-8 rounded-2xl font-bold text-lg sm:text-xl shadow-lg transition-all transform duration-200 flex flex-col items-center justify-center gap-2 border relative overflow-hidden group ${
+            className={`w-full h-28 sm:h-32 rounded-2xl font-bold text-lg sm:text-xl shadow-lg transition-all transform duration-200 flex flex-col items-center justify-center gap-2 border relative overflow-hidden shrink-0 group ${
                 status === AppStatus.RECORDING
                 ? 'bg-gradient-to-br from-indigo-500 to-violet-600 text-white border-transparent hover:shadow-indigo-200/50 hover:scale-[1.01] active:scale-[0.98]'
                 : status === AppStatus.ANALYZING
@@ -380,18 +444,20 @@ export default function App() {
           </div>
 
           {/* 3. Knowledge Panel */}
-          <div className="flex-1 min-h-[300px]">
+          <div className={`transition-all duration-300 ${isKnowledgeOpen ? 'flex-1 min-h-[300px]' : 'flex-none'}`}>
             <KnowledgePanel 
                 items={knowledgeItems} 
                 onAddFiles={handleFiles}
                 onRemoveItem={handleRemoveKnowledge}
                 disabled={false}
+                isExpanded={isKnowledgeOpen}
+                onToggle={() => setIsKnowledgeOpen(!isKnowledgeOpen)}
             />
           </div>
         </aside>
 
         {/* Right Content (Transcript) */}
-        <section className="lg:col-span-8 flex flex-col h-full overflow-hidden bg-white rounded-2xl shadow-sm border border-slate-200/80 relative">
+        <section className="lg:col-span-8 flex flex-col flex-1 min-h-0 lg:h-full overflow-hidden bg-white rounded-2xl shadow-sm border border-slate-200/80 relative">
           
           {/* Header */}
           <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50 backdrop-blur-sm sticky top-0 z-10">
