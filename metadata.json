@@ -1,0 +1,7 @@
+{
+  "name": "Teaching Copilot",
+  "description": "Real-time audio monitoring assistant for GMAT instructors using Gemini Live API.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
