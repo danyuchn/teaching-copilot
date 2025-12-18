@@ -25,7 +25,7 @@ export class GeminiOnDemandService {
   private stream: MediaStream | null = null;
   private maxBufferSeconds: number = 60; 
   private recordedMimeType: string = 'audio/webm';
-  private currentModel: string = 'gemini-3-flash-preview';
+  private currentModel: string = 'gemini-2.5-flash-lite';
   private cachedContentName: string | null = null;
   private isCacheActive: boolean = false;
   private sourceMode: AudioSourceMode = 'mic';
@@ -279,7 +279,6 @@ export class GeminiOnDemandService {
             recommended_script: { type: Type.STRING, description: "Precise script for the teacher to use" }
           },
           required: ["situation_analysis", "suggested_action", "recommended_script"],
-          propertyOrdering: ["situation_analysis", "suggested_action", "recommended_script"]
         }
       };
 
@@ -289,7 +288,7 @@ export class GeminiOnDemandService {
          config.systemInstruction = `${systemInstruction}\n\n[RAG Context]\n${contextContent}`;
       }
 
-      // Use generateContent instead of Stream for more reliable JSON Mode completion
+      // Use generateContent instead of Stream for reliable JSON Mode completion
       const response = await this.client.models.generateContent({
         model: this.currentModel,
         contents: [

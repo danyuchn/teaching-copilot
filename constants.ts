@@ -9,7 +9,7 @@ You are analyzing a student-teacher consultation audio clip.
 [Instructions]
 1. Focus on identifying the student's confusion and providing teaching advice.
 2. You MUST output your response in JSON format.
-3. The JSON MUST contain EXACTLY three keys: "situation_analysis", "suggested_action", and "recommended_script".
+3. The JSON MUST contain EXACTLY these three keys: "situation_analysis", "suggested_action", and "recommended_script".
 
 [Schema Example]
 {

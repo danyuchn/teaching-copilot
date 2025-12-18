@@ -71,7 +71,7 @@ export default function App() {
     estimatedCost: 0
   });
   
-  const [selectedModel, setSelectedModel] = useState<string>('gemini-3-flash-preview');
+  const [selectedModel, setSelectedModel] = useState<string>('gemini-2.5-flash-lite');
   const [bufferDuration, setBufferDuration] = useState<number>(60);
   
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
