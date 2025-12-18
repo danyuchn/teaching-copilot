@@ -35,6 +35,17 @@ Teaching Copilot is a real-time voice monitoring assistant designed to help inst
 - **AI SDK**: `@google/genai` (Gemini Pro & Flash models)
 - **Data Privacy**: Purely client-side logic. Sensitive settings and knowledge files stay in your local storage.
 
+## ⚠️ Privacy & Ethical Use
+
+**IMPORTANT: Informed Consent Required**
+
+This application records and processes audio data to provide real-time suggestions. Use of this tool is subject to the following ethical and legal guidelines:
+
+1.  **Transparency**: You must clearly inform all participants (students, teaching assistants, etc.) that the session is being monitored and recorded by an AI assistant.
+2.  **Consent**: You must obtain explicit informed consent from all parties involved before initiating a live session or recording.
+3.  **Local Compliance**: Ensure your use of this tool complies with local privacy laws and institutional policies regarding audio recording and AI processing.
+4.  **Data Handling**: Use the "Privacy Wipe" feature to clear sensitive local data between different users or sessions.
+
 ## Setup Instructions
 
 See [SETUP_GUIDE.md](SETUP_GUIDE.md) for detailed installation steps. 

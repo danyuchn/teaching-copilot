@@ -4,6 +4,7 @@ import { geminiService, AudioSourceMode } from './services/geminiService';
 import { AppStatus, KnowledgeItem, UsageStats } from './types';
 import { KnowledgePanel } from './components/KnowledgePanel';
 import { DEFAULT_SYSTEM_INSTRUCTION, DEFAULT_KNOWLEDGE_CONTENT } from './constants';
+import { TutorialOverlay, TutorialStep } from './components/TutorialOverlay';
 
 // Device detection helper
 const isMobile = () => /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
@@ -60,6 +61,7 @@ export default function App() {
   const [liveTranscript, setLiveTranscript] = useState<string>("");
   const [hasRecordedData, setHasRecordedData] = useState<boolean>(false);
   const [showResetSuccess, setShowResetSuccess] = useState(false);
+  const [showTutorial, setShowTutorial] = useState(false);
   
   const [systemInstruction, setSystemInstruction] = useState<string>(DEFAULT_SYSTEM_INSTRUCTION);
   const [knowledgeItems, setKnowledgeItems] = useState<KnowledgeItem[]>([]);
@@ -81,6 +83,39 @@ export default function App() {
 
   const transcriptEndRef = useRef<HTMLDivElement>(null);
 
+  const tutorialSteps: TutorialStep[] = [
+    {
+      targetId: 'step-start-live',
+      title: 'Start Live Monitoring',
+      content: 'Click here to begin. AI will silently listen to the conversation in the background without interrupting your teaching flow.',
+      position: 'bottom'
+    },
+    {
+      targetId: 'step-analyze',
+      title: 'Golden Analysis Button',
+      content: 'When you hear a student question or feel a session plateau, click here. AI will immediately analyze the last 60 seconds and provide advice.',
+      position: 'right'
+    },
+    {
+      targetId: 'step-rag',
+      title: 'Knowledge Base (RAG)',
+      content: 'Upload your SOPs or lecture notes here. This allows the AI to provide precise suggestions based on your unique teaching logic.',
+      position: 'right'
+    },
+    {
+      targetId: 'step-persona',
+      title: 'AI Persona & Behavior',
+      content: "Define the AI's tone and feedback style here. All settings are automatically saved to your local browser.",
+      position: 'right'
+    },
+    {
+      targetId: 'step-suggestions',
+      title: 'AI Suggestions Panel',
+      content: 'All analysis results, including Situation Analysis, Suggested Actions, and Recommended Scripts, will appear in real-time here.',
+      position: 'left'
+    }
+  ];
+
   useEffect(() => {
     const savedInstruction = localStorage.getItem('tc_system_instruction');
     if (savedInstruction) setSystemInstruction(savedInstruction);
@@ -98,11 +133,21 @@ export default function App() {
         ]);
     }
 
+    const hasSeenTutorial = localStorage.getItem('tc_has_seen_tutorial');
+    if (!hasSeenTutorial) {
+        setShowTutorial(true);
+    }
+
     geminiService.onUsageUpdate = (stats) => setUsage(stats);
     geminiService.onCacheStatusChange = (isActive) => setIsCacheReady(isActive);
 
     return () => geminiService.stopRecording();
   }, []);
+
+  const handleTutorialComplete = () => {
+    localStorage.setItem('tc_has_seen_tutorial', 'true');
+    setShowTutorial(false);
+  };
 
   useEffect(() => {
     localStorage.setItem('tc_system_instruction', systemInstruction);
@@ -133,10 +178,12 @@ export default function App() {
   }, [liveTranscript]);
 
   const handleFiles = async (files: FileList) => {
+    console.log(`[RAG Test] User selected ${files.length} files for knowledge base injection.`);
     const newItems: KnowledgeItem[] = [];
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       const text = await file.text();
+      console.log(`[RAG Test] Processing file: ${file.name} (${text.length} chars)`);
       newItems.push({ id: Math.random().toString(36).substr(2, 9), name: file.name, content: text });
     }
     setKnowledgeItems(prev => [...prev, ...newItems]);
@@ -148,6 +195,7 @@ export default function App() {
 
   const handleClearAllData = () => {
     if (window.confirm("WARNING: This will clear all history, knowledge base files, and settings. Continue?")) {
+        console.log("[Privacy Test] Reset initiated by user via 'Privacy Wipe'.");
         localStorage.clear();
         geminiService.clearAllSessionData();
         setLiveTranscript("");
@@ -185,7 +233,7 @@ export default function App() {
         if (geminiService.hasFullSessionData()) {
           setHasRecordedData(true);
         }
-      }, 300);
+      }, 500);
     }
   };
 
@@ -332,28 +380,36 @@ export default function App() {
         )}
 
         <div className="flex flex-col gap-2">
-            <div className="bg-white p-1 rounded-xl border border-slate-200 flex shadow-sm shrink-0">
+            <div className="bg-white p-1 rounded-xl border border-slate-200 flex flex-wrap shadow-sm shrink-0">
                 <button 
                     onClick={() => setAudioMode('mic')}
                     disabled={status !== AppStatus.IDLE}
-                    className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs font-bold transition-all ${audioMode === 'mic' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50 disabled:opacity-50'}`}
+                    className={`flex-1 min-w-[80px] flex items-center justify-center gap-1.5 py-2 rounded-lg text-[10px] font-bold transition-all ${audioMode === 'mic' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50 disabled:opacity-50'}`}
                 >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg>
-                    Microphone
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg>
+                    Mic
                 </button>
                 <button 
                     onClick={() => {
-                        if (isDeviceMobile) {
-                            alert("Mobile browsers do not support system audio capture.");
-                        } else {
-                            setAudioMode('system');
-                        }
+                        if (isDeviceMobile) alert("Desktop only.");
+                        else setAudioMode('system');
                     }}
                     disabled={status !== AppStatus.IDLE || isDeviceMobile}
-                    className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs font-bold transition-all ${audioMode === 'system' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'} ${isDeviceMobile ? 'opacity-40 cursor-not-allowed' : ''}`}
+                    className={`flex-1 min-w-[80px] flex items-center justify-center gap-1.5 py-2 rounded-lg text-[10px] font-bold transition-all ${audioMode === 'system' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'} ${isDeviceMobile ? 'opacity-40 cursor-not-allowed' : ''}`}
                 >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
-                    {isDeviceMobile ? 'Desktop Only' : 'System Audio'}
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
+                    System
+                </button>
+                <button 
+                    onClick={() => {
+                        if (isDeviceMobile) alert("Desktop only.");
+                        else setAudioMode('mixed');
+                    }}
+                    disabled={status !== AppStatus.IDLE || isDeviceMobile}
+                    className={`flex-1 min-w-[80px] flex items-center justify-center gap-1.5 py-2 rounded-lg text-[10px] font-bold transition-all ${audioMode === 'mixed' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'} ${isDeviceMobile ? 'opacity-40 cursor-not-allowed' : ''}`}
+                >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                    Mixed
                 </button>
             </div>
 
@@ -380,7 +436,7 @@ export default function App() {
             )}
         </div>
 
-        <button onClick={triggerAnalysis} disabled={status !== AppStatus.RECORDING} className={`w-full h-32 rounded-2xl font-bold text-lg shadow-lg transition-all flex flex-col items-center justify-center gap-2 border relative overflow-hidden shrink-0 ${status === AppStatus.RECORDING ? 'bg-gradient-to-br from-indigo-500 to-violet-600 text-white active:scale-[0.98]' : 'bg-white text-slate-300'}`}>
+        <button id="step-analyze" onClick={triggerAnalysis} disabled={status !== AppStatus.RECORDING} className={`w-full h-32 rounded-2xl font-bold text-lg shadow-lg transition-all flex flex-col items-center justify-center gap-2 border relative overflow-hidden shrink-0 ${status === AppStatus.RECORDING ? 'bg-gradient-to-br from-indigo-500 to-violet-600 text-white active:scale-[0.98]' : 'bg-white text-slate-300'}`}>
             {status === AppStatus.ANALYZING ? (
                 <>
                     <svg className="animate-spin h-8 w-8 text-white/80" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
@@ -399,7 +455,7 @@ export default function App() {
             )}
         </button>
 
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200/80 overflow-hidden flex flex-col shrink-0">
+        <div id="step-persona" className="bg-white rounded-2xl shadow-sm border border-slate-200/80 overflow-hidden flex flex-col shrink-0">
              <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50 cursor-pointer" onClick={() => setIsSettingsOpen(!isSettingsOpen)}>
                 <h2 className="text-sm font-semibold text-slate-700">AI Persona Settings</h2>
                 <svg className={`w-4 h-4 text-slate-400 transform transition-transform ${isSettingsOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M19 9l-7 7-7-7" /></svg>
@@ -415,20 +471,32 @@ export default function App() {
              )}
         </div>
         
-        <div className={`transition-all duration-300 ${isKnowledgeOpen ? 'flex-1 min-h-[300px]' : 'flex-none'}`}>
+        <div id="step-rag" className={`transition-all duration-300 ${isKnowledgeOpen ? 'flex-1 min-h-[300px]' : 'flex-none'}`}>
             <KnowledgePanel items={knowledgeItems} onAddFiles={handleFiles} onRemoveItem={handleRemoveKnowledge} disabled={false} isExpanded={isKnowledgeOpen} onToggle={() => setIsKnowledgeOpen(!isKnowledgeOpen)} />
         </div>
 
-        <button onClick={handleClearAllData} className="w-full flex items-center justify-center gap-2 py-3 text-xs font-bold text-rose-600 bg-rose-50 border border-rose-100 rounded-xl hover:bg-rose-100 transition-colors shadow-sm mt-auto mb-2" title="Clear all history and settings for privacy">
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-            Privacy Wipe
-        </button>
+        <div className="mt-auto pt-4 space-y-4">
+            <button onClick={handleClearAllData} className="w-full flex items-center justify-center gap-2 py-3 text-xs font-bold text-rose-600 bg-rose-50 border border-rose-100 rounded-xl hover:bg-rose-100 transition-colors shadow-sm mb-2" title="Clear all history and settings for privacy">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                Privacy Wipe
+            </button>
+
+            <div className="bg-slate-100/50 p-4 rounded-xl border border-slate-200/50 flex items-start gap-3">
+                <svg className="w-5 h-5 text-slate-400 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+                <p className="text-[10px] text-slate-500 italic leading-relaxed">
+                  <strong>Privacy Notice:</strong> This application records and processes audio. 
+                  Please ensure all parties in the consultation have provided informed consent 
+                  before starting a live session.
+                </p>
+            </div>
+        </div>
     </div>
   );
 
   return (
     <div className="h-screen bg-slate-50 flex flex-col font-sans text-slate-900 overflow-hidden relative">
-      {/* Mobile Drawer Overlay */}
+      {showTutorial && <TutorialOverlay steps={tutorialSteps} onComplete={handleTutorialComplete} />}
+      
       {isMobileMenuOpen && (
         <div className="fixed inset-0 z-[60] lg:hidden">
             <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity" onClick={() => setIsMobileMenuOpen(false)}></div>
@@ -446,7 +514,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Toast Feedback */}
       {showResetSuccess && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[100] bg-emerald-600 text-white px-6 py-2 rounded-full shadow-xl animate-bounce flex items-center gap-2">
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M5 13l4 4L19 7" /></svg>
@@ -454,7 +521,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Header */}
       <header className="bg-white/90 backdrop-blur-md border-b border-slate-200 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -462,7 +528,7 @@ export default function App() {
                 <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M4 6h16M4 12h16m-7 6h7" /></svg>
             </button>
             <div className="hidden sm:flex bg-gradient-to-br from-indigo-600 to-violet-600 text-white p-2 rounded-lg shadow-sm">
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg>
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6 a3 3 0 01-3 3z" /></svg>
             </div>
             <div>
               <h1 className="text-base sm:text-lg font-bold text-slate-800 leading-tight">Teaching Copilot</h1>
@@ -496,7 +562,7 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2">
-             <button onClick={toggleRecording} className={`px-4 py-2 rounded-lg font-bold text-sm border shadow-sm transition-all ${status !== AppStatus.IDLE ? 'bg-rose-50 text-rose-600 border-rose-200 animate-pulse' : 'bg-slate-900 text-white border-transparent active:scale-95'}`}>
+             <button id="step-start-live" onClick={toggleRecording} className={`px-4 py-2 rounded-lg font-bold text-sm border shadow-sm transition-all ${status !== AppStatus.IDLE ? 'bg-rose-50 text-rose-600 border-rose-200 animate-pulse' : 'bg-slate-900 text-white border-transparent active:scale-95'}`}>
               {status !== AppStatus.IDLE ? 'Stop Listening' : 'Start Live'}
             </button>
           </div>
@@ -504,14 +570,12 @@ export default function App() {
       </header>
 
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 flex flex-col lg:grid lg:grid-cols-12 gap-6 overflow-hidden">
-        {/* Desktop Sidebar */}
         <aside className="hidden lg:col-span-4 lg:flex flex-col gap-4 overflow-y-auto scrollbar-hide shrink-0">
           {renderSidebarContent(false)}
         </aside>
 
-        {/* Main Sugggestion Area */}
-        <section className="lg:col-span-8 flex flex-col flex-1 min-h-0 bg-white rounded-2xl shadow-sm border border-slate-200/80 relative overflow-hidden">
-          <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/30 backdrop-blur-sm sticky top-0 z-10">
+        <section id="step-suggestions" className="lg:col-span-8 flex flex-col flex-1 min-h-0 bg-white rounded-2xl shadow-sm border border-slate-200/80 relative overflow-hidden">
+          <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50 backdrop-blur-sm sticky top-0 z-10">
             <h2 className="text-sm font-bold text-slate-700 flex items-center gap-2 uppercase tracking-wide">
                 <svg className="w-4 h-4 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
                 AI Suggestions
@@ -522,50 +586,49 @@ export default function App() {
           </div>
           
           <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-white scroll-smooth relative">
-            {/* Session Ended Action Board */}
-            {hasRecordedData && status === AppStatus.IDLE && (
-                <div className="mb-8 p-6 bg-gradient-to-br from-indigo-50 to-violet-50 rounded-2xl border border-indigo-100 shadow-sm animate-in zoom-in-95 duration-500">
-                    <div className="flex items-start justify-between mb-4">
-                        <div>
-                            <h3 className="text-indigo-900 font-bold text-lg mb-1">Session Summary Ready</h3>
-                            <p className="text-indigo-600/70 text-sm">Recording ended. You can download the full audio or generate a full transcript for later review.</p>
-                        </div>
-                        <div className="p-2 bg-indigo-100 rounded-full text-indigo-600">
-                            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                        </div>
-                    </div>
-                    <div className="flex flex-wrap gap-3">
-                        <button onClick={handleDownloadAudio} className="flex-1 flex items-center justify-center gap-2 bg-white text-indigo-600 font-bold py-3 px-4 rounded-xl border border-indigo-200 hover:bg-indigo-50 transition-colors shadow-sm">
-                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
-                            Download Full Audio
-                        </button>
-                        <button onClick={handleGenerateFullTranscript} className="flex-1 flex items-center justify-center gap-2 bg-indigo-600 text-white font-bold py-3 px-4 rounded-xl hover:bg-indigo-700 transition-colors shadow-md">
-                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                            Generate Full Transcript
-                        </button>
-                    </div>
-                </div>
-            )}
+            <div className="max-w-3xl mx-auto min-h-full flex flex-col">
+                {liveTranscript ? (
+                  <div className="flex-1">
+                    {parseTranscriptBlocks(liveTranscript)}
+                  </div>
+                ) : (
+                  <div className="flex-1 flex flex-col items-center justify-center text-slate-300 pointer-events-none p-8 text-center animate-in fade-in duration-1000">
+                     <div className="bg-slate-50 p-6 rounded-full mb-6 border border-slate-100 shadow-inner">
+                        <svg className="w-16 h-16 text-slate-200" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6 a3 3 0 01-3-3z" /></svg>
+                     </div>
+                     <h3 className="text-slate-400 text-lg font-bold mb-2">Monitoring Ready</h3>
+                     <p className="text-sm text-slate-400/60 max-w-sm leading-relaxed">AI is waiting for you to start the live connection.</p>
+                  </div>
+                )}
 
-            {liveTranscript ? (
-              <div className="max-w-3xl mx-auto">
-                {parseTranscriptBlocks(liveTranscript)}
-                <div ref={transcriptEndRef} className="h-20" />
-              </div>
-            ) : (
-              <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300 pointer-events-none p-8 text-center animate-in fade-in duration-1000">
-                 <div className="bg-slate-50 p-6 rounded-full mb-6 border border-slate-100 shadow-inner">
-                    <svg className="w-16 h-16 text-slate-200" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3-3z" /></svg>
-                 </div>
-                 <h3 className="text-slate-400 text-lg font-bold mb-2">Monitoring Ready</h3>
-                 <p className="text-sm text-slate-400/60 max-w-sm leading-relaxed">
-                    AI is waiting for you to start the live connection.
-                 </p>
-              </div>
-            )}
+                {hasRecordedData && status === AppStatus.IDLE && (
+                    <div className="mt-8 mb-12 p-6 bg-gradient-to-br from-indigo-50 to-violet-50 rounded-2xl border border-indigo-100 shadow-sm animate-in zoom-in-95 duration-500 pointer-events-auto">
+                        <div className="flex items-start justify-between mb-4">
+                            <div>
+                                <h3 className="text-indigo-900 font-bold text-lg mb-1">Session Summary Ready</h3>
+                                <p className="text-indigo-600/70 text-sm">Recording ended. You can download the full audio or generate a full transcript for later review.</p>
+                            </div>
+                            <div className="p-2 bg-indigo-100 rounded-full text-indigo-600">
+                                <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                            </div>
+                        </div>
+                        <div className="flex flex-wrap gap-3">
+                            <button onClick={handleDownloadAudio} className="flex-1 flex items-center justify-center gap-2 bg-white text-indigo-600 font-bold py-3 px-4 rounded-xl border border-indigo-200 hover:bg-indigo-50 transition-colors shadow-sm">
+                                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                                Download Full Audio
+                            </button>
+                            <button onClick={handleGenerateFullTranscript} className="flex-1 flex items-center justify-center gap-2 bg-indigo-600 text-white font-bold py-3 px-4 rounded-xl hover:bg-indigo-700 transition-colors shadow-md">
+                                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                                Generate Full Transcript
+                            </button>
+                        </div>
+                    </div>
+                )}
+                
+                <div ref={transcriptEndRef} className="h-10" />
+            </div>
           </div>
 
-          {/* Floating Mobile Analysis Action */}
           {(status === AppStatus.RECORDING || status === AppStatus.ANALYZING) && (
             <div className="lg:hidden absolute bottom-6 right-6 z-40">
                 <button 

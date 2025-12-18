@@ -14,7 +14,7 @@ const PRICING_RATES_PER_1M: Record<string, { inputAudio: number, output: number 
 const DEFAULT_RATES = { inputAudio: 1.00, output: 2.50 }; 
 const MIN_CACHING_CHARS = 32000;
 
-export type AudioSourceMode = 'mic' | 'system';
+export type AudioSourceMode = 'mic' | 'system' | 'mixed';
 
 export class GeminiOnDemandService {
   private client: GoogleGenAI;
@@ -22,7 +22,8 @@ export class GeminiOnDemandService {
   private audioChunks: Blob[] = []; 
   private fullSessionChunks: Blob[] = []; 
   private headerChunk: Blob | null = null; 
-  private stream: MediaStream | null = null;
+  private streams: MediaStream[] = [];
+  private audioContext: AudioContext | null = null;
   private maxBufferSeconds: number = 60; 
   private recordedMimeType: string = 'audio/webm';
   private currentModel: string = 'gemini-2.5-flash-lite';
@@ -62,8 +63,14 @@ export class GeminiOnDemandService {
     this.usageStats.estimatedCost += cost;
   }
 
+  private isRateLimitError(error: any): boolean {
+    const msg = error?.message?.toLowerCase() || "";
+    return msg.includes("429") || msg.includes("rate limit") || msg.includes("quota exceeded");
+  }
+
   setModel(modelName: string) {
     if (this.currentModel !== modelName) {
+      console.log(`[Model Test] Switching model to: ${modelName}`);
       this.currentModel = modelName;
       this.cachedContentName = null;
       this.isCacheActive = false;
@@ -73,20 +80,31 @@ export class GeminiOnDemandService {
 
   setBufferDuration(seconds: number) {
     this.maxBufferSeconds = seconds;
+    console.log(`[Buffer Test] Rolling buffer window set to: ${seconds} seconds`);
     if (this.audioChunks.length > this.maxBufferSeconds) {
         this.audioChunks.splice(0, this.audioChunks.length - this.maxBufferSeconds);
     }
   }
 
   async updateContextCache(contextContent: string, systemInstruction: string) {
+    console.log("[RAG Test] Checking Knowledge Base size for Context Caching...");
     if (!contextContent || contextContent.length < MIN_CACHING_CHARS) {
+        console.log(`[RAG Test] KB size (${contextContent.length} chars) below threshold (${MIN_CACHING_CHARS}). Using standard prompt injection.`);
         this.cachedContentName = null;
         this.isCacheActive = false;
         this.onCacheStatusChange(false);
         return;
     }
     try {
-      const fullSystemContent = `${systemInstruction}\n\n[Context / Knowledge Base]\n${contextContent}`;
+      console.log("[RAG Test] Initiating Context Caching for large Knowledge Base...");
+      const technicalProtocol = `
+[TECHNICAL PROTOCOL]
+You MUST respond in JSON format with three fields:
+1. situation_analysis: Summarize student confusion.
+2. suggested_action: Specific teaching strategy.
+3. recommended_script: Verbatim natural language for the teacher.
+`;
+      const fullSystemContent = `${systemInstruction}\n${technicalProtocol}\n\n[Context / Knowledge Base]\n${contextContent}`;
       const cacheResponse = await this.client.caches.create({
         model: this.currentModel,
         config: {
@@ -96,8 +114,14 @@ export class GeminiOnDemandService {
       });
       this.cachedContentName = cacheResponse.name;
       this.isCacheActive = true;
+      console.log("[RAG Test] Context Cache Created Successfully:", this.cachedContentName);
       this.onCacheStatusChange(true);
     } catch (error) {
+      if (this.isRateLimitError(error)) {
+        console.warn("[RAG Test] Cache creation hit rate limit. Retrying standard prompt later.");
+      } else {
+        console.error("[RAG Test] Cache creation failed:", error);
+      }
       this.cachedContentName = null;
       this.isCacheActive = false;
       this.onCacheStatusChange(false);
@@ -122,46 +146,65 @@ export class GeminiOnDemandService {
 
   async startRecording(mode: AudioSourceMode = 'mic') {
     this.sourceMode = mode;
+    this.streams = [];
+    console.log(`[Audio Test] Requesting audio stream in mode: ${mode}`);
     try {
       let finalStream: MediaStream;
 
-      if (mode === 'system') {
-        if (!navigator.mediaDevices.getDisplayMedia) {
-          throw new Error("This browser/device does not support system audio capture (getDisplayMedia). Please use Microphone mode.");
+      if (mode === 'mixed') {
+        const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        this.streams.push(micStream);
+        console.log("[Audio Test] Mic track acquired.");
+
+        const systemDisplayStream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+        });
+        this.streams.push(systemDisplayStream);
+        systemDisplayStream.getVideoTracks().forEach(t => t.stop());
+
+        const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        this.audioContext = audioCtx;
+        const destination = audioCtx.createMediaStreamDestination();
+
+        const micSource = audioCtx.createMediaStreamSource(micStream);
+        micSource.connect(destination);
+
+        if (systemDisplayStream.getAudioTracks().length > 0) {
+          console.log("[Audio Test] System audio track acquired and mixed.");
+          const systemSource = audioCtx.createMediaStreamSource(systemDisplayStream);
+          systemSource.connect(destination);
+        } else {
+          console.warn("[Audio Test] WARNING: System audio requested but no track found. Is 'Share Audio' checked?");
+          systemDisplayStream.getTracks().forEach(t => t.stop());
+          throw new Error("No system audio detected in the shared screen/tab. Please ensure 'Share Audio' is checked.");
         }
 
+        finalStream = destination.stream;
+
+      } else if (mode === 'system') {
         const displayStream = await navigator.mediaDevices.getDisplayMedia({
           video: true,
-          audio: {
-            echoCancellation: false,
-            noiseSuppression: false,
-            autoGainControl: false
-          }
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
         });
-
+        this.streams.push(displayStream);
         const audioTracks = displayStream.getAudioTracks();
         if (audioTracks.length === 0) {
+            console.error("[Audio Test] Error: No audio track found in display stream.");
             displayStream.getTracks().forEach(t => t.stop());
-            throw new Error("No system audio detected. Please ensure 'Share audio' is checked in the dialog.");
+            throw new Error("No system audio detected. Please ensure 'Share Audio' is checked.");
         }
-
         finalStream = new MediaStream(audioTracks);
-        this.stream = displayStream; 
         displayStream.getVideoTracks().forEach(t => t.stop());
-
+        console.log("[Audio Test] System audio stream acquired.");
       } else {
-        finalStream = await navigator.mediaDevices.getUserMedia({ 
-            audio: {
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true
-            } 
-        });
-        this.stream = finalStream;
+        const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        this.streams.push(micStream);
+        finalStream = micStream;
+        console.log("[Audio Test] Mic-only stream acquired.");
       }
 
       this.recordedMimeType = this.getSupportedMimeType();
-      
       this.mediaRecorder = new MediaRecorder(finalStream, { mimeType: this.recordedMimeType });
       this.audioChunks = []; 
       this.fullSessionChunks = []; 
@@ -169,7 +212,10 @@ export class GeminiOnDemandService {
 
       this.mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
-          if (!this.headerChunk) this.headerChunk = event.data;
+          if (!this.headerChunk) {
+            this.headerChunk = event.data;
+            console.log("[Analysis Test] Initial audio header captured.");
+          }
           this.audioChunks.push(event.data);
           if (this.audioChunks.length > this.maxBufferSeconds) this.audioChunks.shift();
           this.fullSessionChunks.push(event.data);
@@ -177,33 +223,40 @@ export class GeminiOnDemandService {
       };
 
       this.mediaRecorder.start(1000); 
+      console.log("[Analysis Test] MediaRecorder started with 1s timeslices.");
 
     } catch (error: any) {
+      console.error("[Audio Test] Stream acquisition failed:", error);
       this.stopRecording();
       throw error;
     }
   }
 
   stopRecording() {
+    console.log("[Analysis Test] Stopping recording and releasing streams.");
     if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
         this.mediaRecorder.stop();
     }
-    if (this.stream) {
-        this.stream.getTracks().forEach(track => {
-            track.stop();
-        });
+    this.streams.forEach(stream => {
+        stream.getTracks().forEach(track => track.stop());
+    });
+    if (this.audioContext) {
+      this.audioContext.close();
+      this.audioContext = null;
     }
+    this.streams = [];
     this.mediaRecorder = null;
-    this.stream = null;
   }
 
   clearAllSessionData() {
+    console.log("[Privacy Test] Executing full session data wipe...");
     this.stopRecording();
     this.audioChunks = [];
     this.fullSessionChunks = [];
     this.headerChunk = null;
     this.usageStats = { analyzedCount: 0, totalAudioSeconds: 0, estimatedCost: 0 };
     this.onUsageUpdate(this.usageStats);
+    console.log("[Privacy Test] Success: All audio chunks and usage stats reset.");
   }
 
   hasFullSessionData(): boolean { return this.fullSessionChunks.length > 0; }
@@ -223,6 +276,8 @@ export class GeminiOnDemandService {
       const base64Audio = await this.blobToBase64(fullBlob);
       const audioDuration = this.fullSessionChunks.length;
 
+      console.log(`[Analysis Test] Sending ${audioDuration}s of audio for full transcription.`);
+
       this.addInputAudioCost(audioDuration);
       this.onUsageUpdate(this.usageStats);
 
@@ -233,10 +288,11 @@ export class GeminiOnDemandService {
           {
              parts: [
                { inlineData: { mimeType: cleanMimeType, data: base64Audio } },
-               { text: "Provide a complete verbatim transcript of this audio. Label speakers clearly as [Teacher] and [Student] if possible. Use timestamp tags like (00:00) at the start of paragraphs. Do NOT add any advice or summary, ONLY the transcript text." }
+               { text: "Provide a complete verbatim transcript of this audio in its ORIGINAL LANGUAGE. DO NOT TRANSLATE. Label speakers clearly as [Teacher] and [Student] if possible. Use timestamp tags like (00:00). If the audio is silent or unintelligible, mark it as [Silence/Unintelligible]." }
              ]
           }
         ],
+        config: { temperature: 0 }
       });
 
       for await (const chunk of responseStream) {
@@ -248,17 +304,24 @@ export class GeminiOnDemandService {
         }
       }
     } catch (error: any) {
-      yield `\n\n[Transcript Error] ${error.message}`;
+      console.error("[Analysis Test] Transcript generation failed:", error);
+      if (this.isRateLimitError(error)) {
+        yield "\n\n[Transcript Error] API Rate limit reached. Please wait a moment and try again.";
+      } else {
+        yield `\n\n[Transcript Error] ${error.message}`;
+      }
     }
   }
 
   async *analyzeAudioBufferStream(contextContent: string, systemInstruction: string) {
     if (this.audioChunks.length === 0) {
+      console.warn("[Analysis Test] Triggered analysis but audio buffer is empty.");
       yield "No audio recorded yet.";
       return;
     }
 
     try {
+      console.log(`[Analysis Test] Analyzing last ${this.audioChunks.length} seconds of audio.`);
       const chunksToProcess = this.headerChunk ? [this.headerChunk, ...this.audioChunks] : [...this.audioChunks];
       const audioBlob = new Blob(chunksToProcess, { type: this.recordedMimeType });
       const base64Audio = await this.blobToBase64(audioBlob);
@@ -282,10 +345,21 @@ export class GeminiOnDemandService {
         }
       };
 
+      const technicalProtocol = `
+[TECHNICAL PROTOCOL - DO NOT IGNORE]
+You MUST respond in strict JSON format.
+FIELDS REQUIRED:
+1. situation_analysis: A short summary of why the student is confused or what the logic gap is.
+2. suggested_action: The best pedagogical next step for the teacher based on your Knowledge Base.
+3. recommended_script: A verbatim script for the teacher to say aloud right now. It must sound natural.
+`;
+
       if (this.isCacheActive && this.cachedContentName) {
+         console.log("[Analysis Test] Using Active Context Cache:", this.cachedContentName);
          config.cachedContent = this.cachedContentName;
       } else {
-         config.systemInstruction = `${systemInstruction}\n\n[RAG Context]\n${contextContent}`;
+         console.log("[Analysis Test] Using standard prompt injection (No cache).");
+         config.systemInstruction = `${systemInstruction}\n${technicalProtocol}\n\n[RAG Context]\n${contextContent}`;
       }
 
       const response = await this.client.models.generateContent({
@@ -303,12 +377,18 @@ export class GeminiOnDemandService {
 
       const text = response.text;
       if (text) {
+        console.log("[Analysis Test] Raw AI JSON Response Received:", text);
         this.addOutputTextCost(text);
         this.onUsageUpdate(this.usageStats);
         yield text;
       }
     } catch (error: any) {
-      yield `\n\n[Error] ${error.message}`;
+      console.error("[Analysis Test] Analysis execution failed:", error);
+      if (this.isRateLimitError(error)) {
+        yield "\n\n[Error] API Rate limit reached. Please wait a moment and try again.";
+      } else {
+        yield `\n\n[Error] ${error.message}`;
+      }
     }
   }
 
