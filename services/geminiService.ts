@@ -2,42 +2,34 @@
 import { GoogleGenAI } from "@google/genai";
 import { UsageStats } from "../types";
 
-// Pricing Constants based on Gemini 2.5 Pricing (Paid Tier)
-// 1 second of audio ~= 25 tokens. 
-const TOKENS_PER_SECOND_AUDIO = 25;
+const TOKENS_PER_SECOND_AUDIO = 25; 
+const CHARS_PER_TOKEN_ESTIMATION = 3; 
 
-// Rates per 1 Million Tokens (Input Audio)
-// Source: Google Cloud Pricing (Flash: $1.00, Flash-Lite: $0.30)
-const PRICING_RATES_PER_1M: Record<string, number> = {
-  'gemini-2.5-flash': 1.00,
-  'gemini-2.5-flash-lite': 0.30,
+const PRICING_RATES_PER_1M: Record<string, { inputAudio: number, output: number }> = {
+  'gemini-3-flash-preview': { inputAudio: 1.00, output: 3.00 },
+  'gemini-2.5-flash': { inputAudio: 1.00, output: 2.50 },
+  'gemini-2.5-flash-lite': { inputAudio: 0.30, output: 0.40 },
 };
 
-const DEFAULT_RATE = 1.00; // Fallback to Flash rate
-
-// Minimum characters to attempt caching. 
+const DEFAULT_RATES = { inputAudio: 1.00, output: 2.50 }; 
 const MIN_CACHING_CHARS = 32000;
+
+export type AudioSourceMode = 'mic' | 'system';
 
 export class GeminiOnDemandService {
   private client: GoogleGenAI;
   private mediaRecorder: MediaRecorder | null = null;
-  
-  private audioChunks: Blob[] = []; // Rolling buffer (for live analysis)
-  private fullSessionChunks: Blob[] = []; // Full session buffer (for export/transcript)
-  
-  private headerChunk: Blob | null = null; // Store the first chunk (header)
+  private audioChunks: Blob[] = []; 
+  private fullSessionChunks: Blob[] = []; 
+  private headerChunk: Blob | null = null; 
   private stream: MediaStream | null = null;
-  private maxBufferSeconds: number = 60; // Default to 60 seconds
+  private maxBufferSeconds: number = 60; 
   private recordedMimeType: string = 'audio/webm';
-
-  // Model State
-  private currentModel: string = 'gemini-2.5-flash';
-
-  // Caching State
+  private currentModel: string = 'gemini-3-flash-preview';
   private cachedContentName: string | null = null;
   private isCacheActive: boolean = false;
+  private sourceMode: AudioSourceMode = 'mic';
 
-  // Usage Tracking
   private usageStats: UsageStats = {
     analyzedCount: 0,
     totalAudioSeconds: 0,
@@ -51,291 +43,299 @@ export class GeminiOnDemandService {
     this.client = new GoogleGenAI({ apiKey: process.env.API_KEY });
   }
 
-  /**
-   * Helper to get current cost per second based on model
-   */
-  private getCostPerSecond(): number {
-    const rate = PRICING_RATES_PER_1M[this.currentModel] || DEFAULT_RATE;
-    return (TOKENS_PER_SECOND_AUDIO / 1000000) * rate;
+  private getRates() {
+    return PRICING_RATES_PER_1M[this.currentModel] || DEFAULT_RATES;
   }
 
-  /**
-   * Sets the model to use for analysis and caching.
-   * Resets cache state as caches are model-specific.
-   */
+  private addInputAudioCost(seconds: number) {
+    const rates = this.getRates();
+    const inputTokens = seconds * TOKENS_PER_SECOND_AUDIO;
+    const cost = (inputTokens / 1000000) * rates.inputAudio;
+    this.usageStats.estimatedCost += cost;
+    this.usageStats.totalAudioSeconds += seconds;
+  }
+
+  private addOutputTextCost(text: string) {
+    const rates = this.getRates();
+    const estimatedTokens = text.length / CHARS_PER_TOKEN_ESTIMATION;
+    const cost = (estimatedTokens / 1000000) * rates.output;
+    this.usageStats.estimatedCost += cost;
+  }
+
   setModel(modelName: string) {
     if (this.currentModel !== modelName) {
-      console.log(`%c[GeminiService] Switching model to: ${modelName}`, 'color: #3b82f6; font-weight: bold;');
       this.currentModel = modelName;
-      
-      // Invalidate current cache because caches are bound to a specific model.
       this.cachedContentName = null;
       this.isCacheActive = false;
       this.onCacheStatusChange(false);
     }
   }
 
-  /**
-   * Sets the rolling buffer duration in seconds.
-   */
   setBufferDuration(seconds: number) {
-    console.log(`%c[GeminiService] Updating buffer duration to ${seconds} seconds`, 'color: #3b82f6; font-weight: bold;');
     this.maxBufferSeconds = seconds;
-    
-    // Immediately trim the buffer if it exceeds the new limit
     if (this.audioChunks.length > this.maxBufferSeconds) {
-        const removeCount = this.audioChunks.length - this.maxBufferSeconds;
-        this.audioChunks.splice(0, removeCount);
-        console.log(`[GeminiService] Trimmed buffer by ${removeCount} chunks to fit new size.`);
+        this.audioChunks.splice(0, this.audioChunks.length - this.maxBufferSeconds);
     }
   }
 
-  /**
-   * Creates or Updates the Gemini Context Cache.
-   * Now accepts systemInstruction dynamically.
-   */
   async updateContextCache(contextContent: string, systemInstruction: string) {
-    // 1. Length Check: Skip caching if content is too short.
     if (!contextContent || contextContent.length < MIN_CACHING_CHARS) {
-        console.log(`%c[GeminiService] Content length (${contextContent.length} chars) is below the minimum for Context Caching.`, 'color: #f59e0b');
-        
         this.cachedContentName = null;
         this.isCacheActive = false;
         this.onCacheStatusChange(false);
         return;
     }
-
     try {
-      console.log(`%c[GeminiService] Updating Context Cache for model ${this.currentModel}...`, 'color: #d946ef; font-weight: bold;');
-      
-      const fullSystemContent = `
-${systemInstruction}
-
-[Context / Knowledge Base (Cached)]
-${contextContent}
-`;
-
-      // Create the cache using the SDK
+      const fullSystemContent = `${systemInstruction}\n\n[Context / Knowledge Base]\n${contextContent}`;
       const cacheResponse = await this.client.caches.create({
         model: this.currentModel,
         config: {
-          systemInstruction: {
-            parts: [{ text: fullSystemContent }]
-          },
-          ttl: '3600s', // 1 hour
+          systemInstruction: { parts: [{ text: fullSystemContent }] },
+          ttl: '3600s',
         },
       });
-
       this.cachedContentName = cacheResponse.name;
       this.isCacheActive = true;
       this.onCacheStatusChange(true);
-
-      console.log(`%c[GeminiService] Cache Created Successfully: ${this.cachedContentName}`, 'color: #d946ef');
-    } catch (error: any) {
-      console.error("[GeminiService] Failed to create context cache:", error);
+    } catch (error) {
       this.cachedContentName = null;
       this.isCacheActive = false;
       this.onCacheStatusChange(false);
     }
   }
 
-  async startRecording() {
-    try {
-      this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      // Determine supported mime type
-      this.recordedMimeType = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4";
-      
-      this.mediaRecorder = new MediaRecorder(this.stream, { mimeType: this.recordedMimeType });
+  private getSupportedMimeType(): string {
+    const types = [
+      "audio/webm;codecs=opus",
+      "audio/webm",
+      "audio/ogg;codecs=opus",
+      "audio/mp4",
+      "audio/aac"
+    ];
+    for (const type of types) {
+      if (MediaRecorder.isTypeSupported(type)) {
+        return type;
+      }
+    }
+    return "audio/webm"; // fallback
+  }
 
+  async startRecording(mode: AudioSourceMode = 'mic') {
+    this.sourceMode = mode;
+    try {
+      let finalStream: MediaStream;
+
+      if (mode === 'system') {
+        // getDisplayMedia captures video+audio. 
+        // We MUST specify audio: true and the user must check "Share Audio" in the browser prompt.
+        const displayStream = await navigator.mediaDevices.getDisplayMedia({
+          video: true, // video is required for getDisplayMedia to work properly in many browsers
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false
+          }
+        });
+
+        const audioTracks = displayStream.getAudioTracks();
+        if (audioTracks.length === 0) {
+            displayStream.getTracks().forEach(t => t.stop());
+            throw new Error("No system audio detected. Did you check 'Share Audio' in the pop-up?");
+        }
+
+        // CRITICAL FIX: MediaRecorder crashes if we give it a stream with video tracks 
+        // while specifying an audio-only mimeType. Create a new stream with ONLY audio.
+        finalStream = new MediaStream(audioTracks);
+        this.stream = displayStream; // Keep track of original to stop all tracks later
+
+        // Stop the video track immediately to save CPU/Battery, we only need the audio
+        displayStream.getVideoTracks().forEach(t => t.stop());
+
+      } else {
+        finalStream = await navigator.mediaDevices.getUserMedia({ 
+            audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true
+            } 
+        });
+        this.stream = finalStream;
+      }
+
+      this.recordedMimeType = this.getSupportedMimeType();
+      console.log(`%c[GeminiService] ${mode.toUpperCase()} Recording starting. MimeType: ${this.recordedMimeType}`, 'color: #10b981;');
+      
+      // Initialize recorder with the audio-only stream
+      this.mediaRecorder = new MediaRecorder(finalStream, { mimeType: this.recordedMimeType });
       this.audioChunks = []; 
-      this.fullSessionChunks = []; // Reset full session buffer
+      this.fullSessionChunks = []; 
       this.headerChunk = null;
 
       this.mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
-          if (!this.headerChunk && this.audioChunks.length === 0) {
-            this.headerChunk = event.data;
-          }
-          
-          // 1. Add to rolling buffer
+          if (!this.headerChunk) this.headerChunk = event.data;
           this.audioChunks.push(event.data);
-          if (this.audioChunks.length > this.maxBufferSeconds) {
-            this.audioChunks.shift(); 
-          }
-
-          // 2. Add to full session buffer (Never deleted)
+          if (this.audioChunks.length > this.maxBufferSeconds) this.audioChunks.shift();
           this.fullSessionChunks.push(event.data);
         }
       };
 
+      this.mediaRecorder.onstop = () => {
+          console.log("%c[GeminiService] MediaRecorder actually stopped.", 'color: #6366f1;');
+      };
+
       this.mediaRecorder.start(1000); 
-      console.log("%c[GeminiService] Recording started.", 'color: #10b981');
-    } catch (error) {
-      console.error("[GeminiService] Failed to start recording", error);
+      console.log(`%c[GeminiService] MediaRecorder started successfully.`, 'color: #10b981; font-weight: bold;');
+
+    } catch (error: any) {
+      console.error("[GeminiService] startRecording failed:", error);
+      this.stopRecording();
       throw error;
     }
   }
 
   stopRecording() {
-    if (this.mediaRecorder && this.mediaRecorder.state !== "inactive") {
-      this.mediaRecorder.stop();
+    if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+        this.mediaRecorder.stop();
     }
     if (this.stream) {
-      this.stream.getTracks().forEach(track => track.stop());
+        this.stream.getTracks().forEach(track => {
+            track.stop();
+            console.log(`[GeminiService] Track ${track.kind} stopped.`);
+        });
     }
     this.mediaRecorder = null;
     this.stream = null;
+    console.log(`%c[GeminiService] Session fully stopped.`, 'color: #f59e0b;');
   }
 
-  hasFullSessionData(): boolean {
-      return this.fullSessionChunks.length > 0;
+  clearAllSessionData() {
+    this.stopRecording();
+    this.audioChunks = [];
+    this.fullSessionChunks = [];
+    this.headerChunk = null;
+    this.usageStats = { analyzedCount: 0, totalAudioSeconds: 0, estimatedCost: 0 };
+    this.onUsageUpdate(this.usageStats);
   }
+
+  hasFullSessionData(): boolean { return this.fullSessionChunks.length > 0; }
 
   async getFullAudioBlob(): Promise<Blob> {
-    // If we have a separate header chunk captured at start, we can prepend it,
-    // but usually fullSessionChunks[0] is the header since we push everything there.
-    // We just create the blob from all chunks.
     return new Blob(this.fullSessionChunks, { type: this.recordedMimeType });
   }
 
   async *analyzeAudioBufferStream(contextContent: string, systemInstruction: string) {
     if (this.audioChunks.length === 0) {
-      yield "No audio recorded yet. Please start recording first.";
+      yield "No audio recorded yet. Please wait a few seconds after starting.";
       return;
     }
 
-    // Combine audio chunks into a single Blob
-    // Important: Include the header chunk if it exists to ensure valid container format
-    const chunksToProcess = this.headerChunk 
-        ? [this.headerChunk, ...this.audioChunks] 
-        : [...this.audioChunks];
-        
-    const audioBlob = new Blob(chunksToProcess, { type: this.recordedMimeType });
-    const base64Audio = await this.blobToBase64(audioBlob);
-
-    // Calculate usage
-    const durationSec = this.audioChunks.length; // Approximate
-    const currentCost = this.getCostPerSecond();
-
-    this.usageStats.analyzedCount++;
-    this.usageStats.totalAudioSeconds += durationSec;
-    this.usageStats.estimatedCost += durationSec * currentCost;
-    this.onUsageUpdate(this.usageStats);
-
     try {
-      let requestConfig: any = {};
-      let requestContents: any[] = [
-        {
-           role: 'user',
-           parts: [
-             { inlineData: { mimeType: this.recordedMimeType, data: base64Audio } },
-             { text: "Please analyze the audio based on the system instructions." }
-           ]
-        }
-      ];
+      const chunksToProcess = this.headerChunk ? [this.headerChunk, ...this.audioChunks] : [...this.audioChunks];
+      const audioBlob = new Blob(chunksToProcess, { type: this.recordedMimeType });
+      
+      console.log(`%c[Step 1] Creating Blob... Size: ${(audioBlob.size / 1024).toFixed(2)} KB`, 'color: #8b5cf6;');
+      const base64Audio = await this.blobToBase64(audioBlob);
 
-      // Prepare Request Parameters
+      this.usageStats.analyzedCount++;
+      this.addInputAudioCost(this.audioChunks.length);
+      this.onUsageUpdate(this.usageStats);
+
+      const cleanMimeType = this.recordedMimeType.split(';')[0];
       const requestParams: any = {
         model: this.currentModel,
-        contents: requestContents,
+        contents: [
+          {
+             parts: [
+               { inlineData: { mimeType: cleanMimeType, data: base64Audio } },
+               { text: "Instructions: Analyze the conversation in this audio clip. Focus on identifying the student's confusion and providing teaching advice based on the context." }
+             ]
+          }
+        ],
       };
 
-      // Handle Caching logic
       if (this.isCacheActive && this.cachedContentName) {
          requestParams.cachedContent = this.cachedContentName;
       } else {
-         const fullSystemInstruction = `${systemInstruction}\n\n[Context / Knowledge Base]\n${contextContent}`;
-         requestConfig.systemInstruction = fullSystemInstruction;
-         requestParams.config = requestConfig;
+         requestParams.config = {
+             systemInstruction: `${systemInstruction}\n\n[RAG Context]\n${contextContent}`
+         };
       }
 
       const responseStream = await this.client.models.generateContentStream(requestParams);
+      console.log(`%c[Step 4] Stream Connection Established. Mode: ${this.sourceMode}`, 'color: #10b981;');
 
+      let hasReceivedData = false;
       for await (const chunk of responseStream) {
-        yield chunk.text;
+        const text = chunk.text;
+        if (text) {
+          hasReceivedData = true;
+          this.addOutputTextCost(text);
+          this.onUsageUpdate(this.usageStats);
+          yield text;
+        }
+      }
+
+      if (!hasReceivedData) {
+          yield "\n[Notice] No analysis generated. Please ensure there is clear speech in the recorded segment.";
       }
 
     } catch (error: any) {
-      console.error("[GeminiService] Analysis Error:", error);
-      yield `\n[Error] ${error.message}`;
+      console.error("[GeminiService] API Error:", error);
+      yield `\n\n[Error] ${error.message}`;
     }
   }
 
-  /**
-   * Analyzes the entire session audio to generate a transcript and summary.
-   * This uses a specialized system instruction for transcription.
-   */
   async *analyzeFullSessionStream(contextContent: string) {
     if (this.fullSessionChunks.length === 0) {
         yield "No audio recorded.";
         return;
     }
-
-    const audioBlob = await this.getFullAudioBlob();
-    const base64Audio = await this.blobToBase64(audioBlob);
-    
-    // Usage calc (approximate, full session)
-    const durationSec = this.fullSessionChunks.length;
-    const currentCost = this.getCostPerSecond();
-
-    this.usageStats.analyzedCount++;
-    this.usageStats.totalAudioSeconds += durationSec;
-    this.usageStats.estimatedCost += durationSec * currentCost;
-    this.onUsageUpdate(this.usageStats);
-
-    const TRANSCRIPT_INSTRUCTION = `
-You are a professional transcriber and teaching analyst.
-Your task is to process the **Entire Session Audio** provided.
-
-[Output Format]
-1. **Verbatim Transcript**: 
-   - Transcribe the conversation word-for-word.
-   - Label speakers as [Teacher] and [Student] if clearly distinguishable, otherwise [Speaker 1], [Speaker 2].
-   - Add timestamps [00:00] periodically if possible.
-
-2. **Session Summary**:
-   - Summarize the key topics discussed.
-   - Highlight the main student difficulties identified.
-   - Provide 1-2 key takeaways for the teacher.
-
-[Context / Knowledge Base]
-${contextContent}
-`;
-
-    const requestParams: any = {
-        model: this.currentModel,
-        contents: [
-            {
-                role: 'user',
-                parts: [
-                    { inlineData: { mimeType: this.recordedMimeType, data: base64Audio } },
-                    { text: "Please generate the full transcript and summary." }
-                ]
-            }
-        ],
-        config: {
-            systemInstruction: TRANSCRIPT_INSTRUCTION
-        }
-    };
-
     try {
+        const audioBlob = await this.getFullAudioBlob();
+        const base64Audio = await this.blobToBase64(audioBlob);
+        const cleanMimeType = this.recordedMimeType.split(';')[0];
+
+        this.usageStats.analyzedCount++;
+        this.addInputAudioCost(this.fullSessionChunks.length);
+        this.onUsageUpdate(this.usageStats);
+
+        const requestParams: any = {
+            model: this.currentModel,
+            contents: [
+                {
+                    parts: [
+                        { inlineData: { mimeType: cleanMimeType, data: base64Audio } },
+                        { text: "Provide a complete transcript and summary." }
+                    ]
+                }
+            ],
+            config: {
+                systemInstruction: `Transcribe and summarize.\n\n[Context]\n${contextContent}`
+            }
+        };
+
         const responseStream = await this.client.models.generateContentStream(requestParams);
         for await (const chunk of responseStream) {
-            yield chunk.text;
+            const text = chunk.text;
+            if (text) {
+              this.addOutputTextCost(text);
+              this.onUsageUpdate(this.usageStats);
+              yield text;
+            }
         }
     } catch (error: any) {
-        console.error("[GeminiService] Full Analysis Error", error);
         yield `\n[Error] ${error.message}`;
     }
-}
+  }
 
   private blobToBase64(blob: Blob): Promise<string> {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onloadend = () => {
         const result = reader.result as string;
-        const base64 = result.split(',')[1];
-        resolve(base64);
+        if (!result) return reject("Conversion failed");
+        resolve(result.split(',')[1]);
       };
       reader.onerror = reject;
       reader.readAsDataURL(blob);
