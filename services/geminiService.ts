@@ -127,7 +127,7 @@ export class GeminiOnDemandService {
 
       if (mode === 'system') {
         if (!navigator.mediaDevices.getDisplayMedia) {
-          throw new Error("此瀏覽器/設備不支援系統音訊擷取 (getDisplayMedia)。請使用麥克風模式 (Mobile browsers do not support internal audio capture).");
+          throw new Error("This browser/device does not support system audio capture (getDisplayMedia). Please use Microphone mode.");
         }
 
         const displayStream = await navigator.mediaDevices.getDisplayMedia({
@@ -142,7 +142,7 @@ export class GeminiOnDemandService {
         const audioTracks = displayStream.getAudioTracks();
         if (audioTracks.length === 0) {
             displayStream.getTracks().forEach(t => t.stop());
-            throw new Error("未偵測到系統音訊。請確保在彈窗中勾選了「分享音訊」。");
+            throw new Error("No system audio detected. Please ensure 'Share audio' is checked in the dialog.");
         }
 
         finalStream = new MediaStream(audioTracks);
@@ -214,7 +214,7 @@ export class GeminiOnDemandService {
 
   async *generateFullTranscriptStream() {
     if (this.fullSessionChunks.length === 0) {
-      yield "無錄音紀錄可轉譯。";
+      yield "No recording session found to transcribe.";
       return;
     }
 
@@ -254,7 +254,7 @@ export class GeminiOnDemandService {
 
   async *analyzeAudioBufferStream(contextContent: string, systemInstruction: string) {
     if (this.audioChunks.length === 0) {
-      yield "尚未錄製音訊。";
+      yield "No audio recorded yet.";
       return;
     }
 
@@ -288,7 +288,6 @@ export class GeminiOnDemandService {
          config.systemInstruction = `${systemInstruction}\n\n[RAG Context]\n${contextContent}`;
       }
 
-      // Use generateContent instead of Stream for reliable JSON Mode completion
       const response = await this.client.models.generateContent({
         model: this.currentModel,
         contents: [

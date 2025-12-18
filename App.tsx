@@ -147,7 +147,7 @@ export default function App() {
   };
 
   const handleClearAllData = () => {
-    if (window.confirm("WARNING: 這將清除所有歷史記錄、知識庫檔案與設定。是否繼續？")) {
+    if (window.confirm("WARNING: This will clear all history, knowledge base files, and settings. Continue?")) {
         localStorage.clear();
         geminiService.clearAllSessionData();
         setLiveTranscript("");
@@ -163,7 +163,7 @@ export default function App() {
   };
 
   const handleResetInstruction = () => {
-    if (window.confirm("將 AI 人格還原至預設範本？")) {
+    if (window.confirm("Reset AI persona to default template?")) {
       setSystemInstruction(DEFAULT_SYSTEM_INSTRUCTION);
     }
   };
@@ -175,13 +175,17 @@ export default function App() {
         setStatus(AppStatus.RECORDING);
         setHasRecordedData(false);
       } catch (e: any) {
-        alert(e.message || "啟動錄音失敗");
+        alert(e.message || "Failed to start recording");
         setStatus(AppStatus.ERROR);
       }
     } else {
       geminiService.stopRecording();
       setStatus(AppStatus.IDLE);
-      if (geminiService.hasFullSessionData()) setHasRecordedData(true);
+      setTimeout(() => {
+        if (geminiService.hasFullSessionData()) {
+          setHasRecordedData(true);
+        }
+      }, 300);
     }
   };
 
@@ -196,21 +200,25 @@ export default function App() {
       for await (const chunk of stream) setLiveTranscript(prev => prev + chunk);
       setStatus(AppStatus.RECORDING);
     } catch (e) {
-      setLiveTranscript(prev => prev + "\n[Error] 分析過程發生錯誤");
+      setLiveTranscript(prev => prev + "\n[Error] An error occurred during analysis");
       setStatus(AppStatus.RECORDING);
     }
   };
 
   const handleDownloadAudio = async () => {
-    const blob = await geminiService.getFullAudioBlob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.style.display = 'none';
-    a.href = url;
-    a.download = `teaching-session-${new Date().toISOString().slice(0, 19)}.webm`;
-    document.body.appendChild(a);
-    a.click();
-    window.URL.revokeObjectURL(url);
+    try {
+      const blob = await geminiService.getFullAudioBlob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      a.download = `teaching-session-${new Date().toISOString().slice(0, 19)}.webm`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      alert("Failed to download audio");
+    }
   };
 
   const handleGenerateFullTranscript = async () => {
@@ -222,21 +230,18 @@ export default function App() {
         for await (const chunk of stream) setLiveTranscript(prev => prev + chunk);
         setStatus(AppStatus.IDLE);
     } catch (e) {
-        setLiveTranscript(prev => prev + "\n[Error] 轉譯過程發生錯誤");
+        setLiveTranscript(prev => prev + "\n[Error] An error occurred during transcription");
         setStatus(AppStatus.IDLE);
     }
   };
 
   const parseTranscriptBlocks = (text: string) => {
-    // Split by session headers
     const rawSessions = text.split(/--- (?:Analysis Session|Full Session Transcript) \(.*?\) ---/);
-    // Filter out initial empty parts
     const sessions = rawSessions.filter(s => s.trim().length > 0);
 
     return sessions.map((session, sIdx) => {
       const trimmed = session.trim();
       
-      // Handle Verbatim Transcript Sessions
       if (trimmed.includes('[Transcript Mode]')) {
           return (
             <div key={`trans-${sIdx}`} className="mb-12 animate-in fade-in slide-in-from-bottom-6 duration-700">
@@ -252,7 +257,6 @@ export default function App() {
           );
       }
 
-      // Handle Analysis Sessions (Expected JSON)
       try {
         const jsonData = JSON.parse(trimmed);
         const blocks = [
@@ -301,7 +305,6 @@ export default function App() {
           </div>
         );
       } catch (e) {
-        // Fallback for non-JSON or partial stream data
         return (
           <div key={`fallback-${sIdx}`} className="mb-6 p-4 bg-slate-50 border border-slate-200 rounded-xl text-slate-600 italic">
             {renderMarkdown(trimmed)}
@@ -341,7 +344,7 @@ export default function App() {
                 <button 
                     onClick={() => {
                         if (isDeviceMobile) {
-                            alert("Mobile browsers do not support System Audio capture. Please use Microphone mode.");
+                            alert("Mobile browsers do not support system audio capture.");
                         } else {
                             setAudioMode('system');
                         }
@@ -418,7 +421,7 @@ export default function App() {
 
         <button onClick={handleClearAllData} className="w-full flex items-center justify-center gap-2 py-3 text-xs font-bold text-rose-600 bg-rose-50 border border-rose-100 rounded-xl hover:bg-rose-100 transition-colors shadow-sm mt-auto mb-2" title="Clear all history and settings for privacy">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-            隱私清除 (Privacy Wipe)
+            Privacy Wipe
         </button>
     </div>
   );
@@ -447,7 +450,7 @@ export default function App() {
       {showResetSuccess && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[100] bg-emerald-600 text-white px-6 py-2 rounded-full shadow-xl animate-bounce flex items-center gap-2">
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M5 13l4 4L19 7" /></svg>
-            <span className="font-bold text-sm">已成功清除所有機敏資料</span>
+            <span className="font-bold text-sm">All sensitive data cleared successfully</span>
         </div>
       )}
 
@@ -525,7 +528,7 @@ export default function App() {
                     <div className="flex items-start justify-between mb-4">
                         <div>
                             <h3 className="text-indigo-900 font-bold text-lg mb-1">Session Summary Ready</h3>
-                            <p className="text-indigo-600/70 text-sm">錄音已結束。您可以下載完整音檔或產生全文逐字稿供之後複習。</p>
+                            <p className="text-indigo-600/70 text-sm">Recording ended. You can download the full audio or generate a full transcript for later review.</p>
                         </div>
                         <div className="p-2 bg-indigo-100 rounded-full text-indigo-600">
                             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
@@ -534,11 +537,11 @@ export default function App() {
                     <div className="flex flex-wrap gap-3">
                         <button onClick={handleDownloadAudio} className="flex-1 flex items-center justify-center gap-2 bg-white text-indigo-600 font-bold py-3 px-4 rounded-xl border border-indigo-200 hover:bg-indigo-50 transition-colors shadow-sm">
                             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
-                            下載完整音檔
+                            Download Full Audio
                         </button>
                         <button onClick={handleGenerateFullTranscript} className="flex-1 flex items-center justify-center gap-2 bg-indigo-600 text-white font-bold py-3 px-4 rounded-xl hover:bg-indigo-700 transition-colors shadow-md">
                             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                            產生全文逐字稿
+                            Generate Full Transcript
                         </button>
                     </div>
                 </div>
@@ -556,7 +559,7 @@ export default function App() {
                  </div>
                  <h3 className="text-slate-400 text-lg font-bold mb-2">Monitoring Ready</h3>
                  <p className="text-sm text-slate-400/60 max-w-sm leading-relaxed">
-                    AI 正在等待您開始連線。
+                    AI is waiting for you to start the live connection.
                  </p>
               </div>
             )}
