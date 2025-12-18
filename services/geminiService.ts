@@ -1,5 +1,5 @@
 
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 import { UsageStats } from "../types";
 
 const TOKENS_PER_SECOND_AUDIO = 25; 
@@ -126,10 +126,12 @@ export class GeminiOnDemandService {
       let finalStream: MediaStream;
 
       if (mode === 'system') {
-        // getDisplayMedia captures video+audio. 
-        // We MUST specify audio: true and the user must check "Share Audio" in the browser prompt.
+        if (!navigator.mediaDevices.getDisplayMedia) {
+          throw new Error("此瀏覽器/設備不支援系統音訊擷取 (getDisplayMedia)。請使用麥克風模式 (Mobile browsers do not support internal audio capture).");
+        }
+
         const displayStream = await navigator.mediaDevices.getDisplayMedia({
-          video: true, // video is required for getDisplayMedia to work properly in many browsers
+          video: true,
           audio: {
             echoCancellation: false,
             noiseSuppression: false,
@@ -140,15 +142,11 @@ export class GeminiOnDemandService {
         const audioTracks = displayStream.getAudioTracks();
         if (audioTracks.length === 0) {
             displayStream.getTracks().forEach(t => t.stop());
-            throw new Error("No system audio detected. Did you check 'Share Audio' in the pop-up?");
+            throw new Error("未偵測到系統音訊。請確保在彈窗中勾選了「分享音訊」。");
         }
 
-        // CRITICAL FIX: MediaRecorder crashes if we give it a stream with video tracks 
-        // while specifying an audio-only mimeType. Create a new stream with ONLY audio.
         finalStream = new MediaStream(audioTracks);
-        this.stream = displayStream; // Keep track of original to stop all tracks later
-
-        // Stop the video track immediately to save CPU/Battery, we only need the audio
+        this.stream = displayStream; 
         displayStream.getVideoTracks().forEach(t => t.stop());
 
       } else {
@@ -163,9 +161,7 @@ export class GeminiOnDemandService {
       }
 
       this.recordedMimeType = this.getSupportedMimeType();
-      console.log(`%c[GeminiService] ${mode.toUpperCase()} Recording starting. MimeType: ${this.recordedMimeType}`, 'color: #10b981;');
       
-      // Initialize recorder with the audio-only stream
       this.mediaRecorder = new MediaRecorder(finalStream, { mimeType: this.recordedMimeType });
       this.audioChunks = []; 
       this.fullSessionChunks = []; 
@@ -180,15 +176,9 @@ export class GeminiOnDemandService {
         }
       };
 
-      this.mediaRecorder.onstop = () => {
-          console.log("%c[GeminiService] MediaRecorder actually stopped.", 'color: #6366f1;');
-      };
-
       this.mediaRecorder.start(1000); 
-      console.log(`%c[GeminiService] MediaRecorder started successfully.`, 'color: #10b981; font-weight: bold;');
 
     } catch (error: any) {
-      console.error("[GeminiService] startRecording failed:", error);
       this.stopRecording();
       throw error;
     }
@@ -201,12 +191,10 @@ export class GeminiOnDemandService {
     if (this.stream) {
         this.stream.getTracks().forEach(track => {
             track.stop();
-            console.log(`[GeminiService] Track ${track.kind} stopped.`);
         });
     }
     this.mediaRecorder = null;
     this.stream = null;
-    console.log(`%c[GeminiService] Session fully stopped.`, 'color: #f59e0b;');
   }
 
   clearAllSessionData() {
@@ -224,17 +212,55 @@ export class GeminiOnDemandService {
     return new Blob(this.fullSessionChunks, { type: this.recordedMimeType });
   }
 
+  async *generateFullTranscriptStream() {
+    if (this.fullSessionChunks.length === 0) {
+      yield "無錄音紀錄可轉譯。";
+      return;
+    }
+
+    try {
+      const fullBlob = await this.getFullAudioBlob();
+      const base64Audio = await this.blobToBase64(fullBlob);
+      const audioDuration = this.fullSessionChunks.length;
+
+      this.addInputAudioCost(audioDuration);
+      this.onUsageUpdate(this.usageStats);
+
+      const cleanMimeType = this.recordedMimeType.split(';')[0];
+      const responseStream = await this.client.models.generateContentStream({
+        model: this.currentModel,
+        contents: [
+          {
+             parts: [
+               { inlineData: { mimeType: cleanMimeType, data: base64Audio } },
+               { text: "Provide a complete verbatim transcript of this audio. Label speakers clearly as [Teacher] and [Student] if possible. Use timestamp tags like (00:00) at the start of paragraphs. Do NOT add any advice or summary, ONLY the transcript text." }
+             ]
+          }
+        ],
+      });
+
+      for await (const chunk of responseStream) {
+        const text = chunk.text;
+        if (text) {
+          this.addOutputTextCost(text);
+          this.onUsageUpdate(this.usageStats);
+          yield text;
+        }
+      }
+    } catch (error: any) {
+      yield `\n\n[Transcript Error] ${error.message}`;
+    }
+  }
+
   async *analyzeAudioBufferStream(contextContent: string, systemInstruction: string) {
     if (this.audioChunks.length === 0) {
-      yield "No audio recorded yet. Please wait a few seconds after starting.";
+      yield "尚未錄製音訊。";
       return;
     }
 
     try {
       const chunksToProcess = this.headerChunk ? [this.headerChunk, ...this.audioChunks] : [...this.audioChunks];
       const audioBlob = new Blob(chunksToProcess, { type: this.recordedMimeType });
-      
-      console.log(`%c[Step 1] Creating Blob... Size: ${(audioBlob.size / 1024).toFixed(2)} KB`, 'color: #8b5cf6;');
       const base64Audio = await this.blobToBase64(audioBlob);
 
       this.usageStats.analyzedCount++;
@@ -242,90 +268,49 @@ export class GeminiOnDemandService {
       this.onUsageUpdate(this.usageStats);
 
       const cleanMimeType = this.recordedMimeType.split(';')[0];
-      const requestParams: any = {
+      
+      const config: any = {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            situation_analysis: { type: Type.STRING, description: "Analysis of student's confusion or conversation context" },
+            suggested_action: { type: Type.STRING, description: "Action points for the teacher" },
+            recommended_script: { type: Type.STRING, description: "Precise script for the teacher to use" }
+          },
+          required: ["situation_analysis", "suggested_action", "recommended_script"],
+          propertyOrdering: ["situation_analysis", "suggested_action", "recommended_script"]
+        }
+      };
+
+      if (this.isCacheActive && this.cachedContentName) {
+         config.cachedContent = this.cachedContentName;
+      } else {
+         config.systemInstruction = `${systemInstruction}\n\n[RAG Context]\n${contextContent}`;
+      }
+
+      // Use generateContent instead of Stream for more reliable JSON Mode completion
+      const response = await this.client.models.generateContent({
         model: this.currentModel,
         contents: [
           {
              parts: [
                { inlineData: { mimeType: cleanMimeType, data: base64Audio } },
-               { text: "Instructions: Analyze the conversation in this audio clip. Focus on identifying the student's confusion and providing teaching advice based on the context." }
+               { text: "Analyze the student-teacher conversation and provide feedback in JSON format." }
              ]
           }
         ],
-      };
+        config: config
+      });
 
-      if (this.isCacheActive && this.cachedContentName) {
-         requestParams.cachedContent = this.cachedContentName;
-      } else {
-         requestParams.config = {
-             systemInstruction: `${systemInstruction}\n\n[RAG Context]\n${contextContent}`
-         };
-      }
-
-      const responseStream = await this.client.models.generateContentStream(requestParams);
-      console.log(`%c[Step 4] Stream Connection Established. Mode: ${this.sourceMode}`, 'color: #10b981;');
-
-      let hasReceivedData = false;
-      for await (const chunk of responseStream) {
-        const text = chunk.text;
-        if (text) {
-          hasReceivedData = true;
-          this.addOutputTextCost(text);
-          this.onUsageUpdate(this.usageStats);
-          yield text;
-        }
-      }
-
-      if (!hasReceivedData) {
-          yield "\n[Notice] No analysis generated. Please ensure there is clear speech in the recorded segment.";
-      }
-
-    } catch (error: any) {
-      console.error("[GeminiService] API Error:", error);
-      yield `\n\n[Error] ${error.message}`;
-    }
-  }
-
-  async *analyzeFullSessionStream(contextContent: string) {
-    if (this.fullSessionChunks.length === 0) {
-        yield "No audio recorded.";
-        return;
-    }
-    try {
-        const audioBlob = await this.getFullAudioBlob();
-        const base64Audio = await this.blobToBase64(audioBlob);
-        const cleanMimeType = this.recordedMimeType.split(';')[0];
-
-        this.usageStats.analyzedCount++;
-        this.addInputAudioCost(this.fullSessionChunks.length);
+      const text = response.text;
+      if (text) {
+        this.addOutputTextCost(text);
         this.onUsageUpdate(this.usageStats);
-
-        const requestParams: any = {
-            model: this.currentModel,
-            contents: [
-                {
-                    parts: [
-                        { inlineData: { mimeType: cleanMimeType, data: base64Audio } },
-                        { text: "Provide a complete transcript and summary." }
-                    ]
-                }
-            ],
-            config: {
-                systemInstruction: `Transcribe and summarize.\n\n[Context]\n${contextContent}`
-            }
-        };
-
-        const responseStream = await this.client.models.generateContentStream(requestParams);
-        for await (const chunk of responseStream) {
-            const text = chunk.text;
-            if (text) {
-              this.addOutputTextCost(text);
-              this.onUsageUpdate(this.usageStats);
-              yield text;
-            }
-        }
+        yield text;
+      }
     } catch (error: any) {
-        yield `\n[Error] ${error.message}`;
+      yield `\n\n[Error] ${error.message}`;
     }
   }
 
